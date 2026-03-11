@@ -43,6 +43,10 @@ class Config:
     RATE_LIMIT_MAX_PER_HOUR: int = int(_get("RATE_LIMIT_MAX_PER_HOUR", default="3"))
     COOLDOWN_MINUTES: int = int(_get("COOLDOWN_MINUTES", default="30"))
 
+    # Inbound SMS webhook
+    WEBHOOK_ENABLED: bool = _get("WEBHOOK_ENABLED", default="true").lower() in ("1", "true", "yes")
+    WEBHOOK_PORT: int = int(_get("WEBHOOK_PORT", default="8080"))
+
     # Logging
     LOG_LEVEL: str = _get("LOG_LEVEL", default="INFO").upper()
 
@@ -52,6 +56,8 @@ class Config:
             f"POLL_INTERVAL_SECONDS={self.POLL_INTERVAL_SECONDS}, "
             f"DAILY_JOB_TIME={self.DAILY_JOB_TIME!r}, "
             f"DATABASE_PATH={self.DATABASE_PATH!r}, "
+            f"WEBHOOK_ENABLED={self.WEBHOOK_ENABLED}, "
+            f"WEBHOOK_PORT={self.WEBHOOK_PORT}, "
             f"LOG_LEVEL={self.LOG_LEVEL!r})"
         )
 

@@ -314,6 +314,57 @@ def _row_to_notification(row: Any) -> Notification:
 
 
 # ---------------------------------------------------------------------------
+# Conversation state (inbound SMS setup flow)
+# ---------------------------------------------------------------------------
+
+def get_conversation_state(db: Database, phone_e164: str) -> dict | None:
+    """Return the conversation state for a phone number, or None if not found."""
+    row = db.conn.execute(
+        "SELECT step, data_json FROM conversation_state WHERE phone_e164 = ?",
+        (phone_e164,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"step": row["step"], "data": json.loads(row["data_json"])}
+
+
+def set_conversation_state(db: Database, phone_e164: str, step: str, data: dict) -> None:
+    """Upsert conversation state for a phone number."""
+    with db.conn:
+        db.conn.execute(
+            "INSERT INTO conversation_state (phone_e164, step, data_json, updated_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(phone_e164) DO UPDATE SET "
+            "step = excluded.step, data_json = excluded.data_json, updated_at = excluded.updated_at",
+            (phone_e164, step, json.dumps(data), _now_utc()),
+        )
+
+
+def delete_conversation_state(db: Database, phone_e164: str) -> None:
+    """Remove conversation state once setup is complete or user resets."""
+    with db.conn:
+        db.conn.execute(
+            "DELETE FROM conversation_state WHERE phone_e164 = ?", (phone_e164,)
+        )
+
+
+def get_user_by_phone(db: Database, phone_e164: str) -> "User | None":
+    """Look up a user by phone number."""
+    row = db.conn.execute(
+        "SELECT id, name, phone_e164, active, timezone, created_at FROM users WHERE phone_e164 = ?",
+        (phone_e164,),
+    ).fetchone()
+    return _row_to_user(row) if row else None
+
+
+def deactivate_user(db: Database, user_id: int) -> None:
+    """Set a user's active flag to 0 (STOP/unsubscribe)."""
+    with db.conn:
+        db.conn.execute("UPDATE users SET active = 0 WHERE id = ?", (user_id,))
+    logger.info("Deactivated user id=%d", user_id)
+
+
+# ---------------------------------------------------------------------------
 # Agent state
 # ---------------------------------------------------------------------------
 

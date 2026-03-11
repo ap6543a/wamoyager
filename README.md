@@ -28,16 +28,19 @@ wamoyager/
 │   └── rails.py          # safety rails: rate limits, cooldowns, schema validation
 │
 ├── services/
-│   ├── wmata_client.py   # WMATA API calls + incident/prediction normalisation
-│   ├── notifier_twilio.py# Twilio SMS send + retries + dry-run mode
-│   └── scheduler.py      # APScheduler: poll job, daily job, housekeeping job
+│   ├── wmata_client.py    # WMATA API calls + incident/prediction normalisation
+│   ├── notifier_twilio.py # Twilio SMS send + retries + dry-run mode
+│   ├── scheduler.py       # APScheduler: poll job, daily job, housekeeping job
+│   ├── webhook_server.py  # Flask inbound SMS webhook (POST /sms)
+│   └── inbound_handler.py # Routes inbound messages to Brain, manages setup state
 │
 ├── memory/
 │   ├── db.py             # SQLite connection + initialisation
 │   ├── models.py         # dataclasses: User, UserPreferences, Incident, Notification
 │   ├── queries.py        # typed query functions (no raw SQL outside this file)
 │   └── migrations/
-│       └── 001_initial.sql
+│       ├── 001_initial.sql
+│       └── 002_conversation_state.sql
 │
 ├── brain/                # ← TEAM SESSION FOCUS
 │   ├── interface.py      # BrainInterface ABC + IncidentDecision + DailyMessageResult
@@ -186,13 +189,61 @@ brain.compose_daily_message(user, predictions, system_status_summary)
 | `incidents` | Deduplicated WMATA incidents (fingerprint = sha256 of title+lines) |
 | `notifications` | Log of every attempted send with provider ID and status |
 | `agent_state` | Key/value store for Brain memory (used by AgentsSdkBrain) |
+| `conversation_state` | Per-phone setup flow state (step + collected data) |
+
+---
+
+## Inbound SMS: self-service user setup
+
+Users can enroll themselves by texting your Twilio number. No admin needed.
+
+### Conversation flow
+
+```
+User texts: "setup"
+  → "Welcome to Wamoyager! What's your first name?"
+User texts: "Alice"
+  → "Hi Alice! What's your Metro station code(s)? (e.g. A01, A15)"
+User texts: "A01"
+  → "Got it. Which line(s) do you ride? (e.g. RD, BL, OR)"
+User texts: "RD"
+  → "Ready to set up: Alice, station A01, line RD. Reply YES to confirm."
+User texts: "yes"
+  → "You're all set! You'll get daily Metro updates at 5pm ET."
+```
+
+Other supported keywords: `STOP` / `UNSUBSCRIBE` to deactivate.
+
+### How to expose the webhook
+
+The webhook server runs on `WEBHOOK_PORT` (default `8080`).
+Twilio needs a public URL — use **ngrok** for local dev or the Pi's static IP in production:
+
+```bash
+# Local dev:
+ngrok http 8080
+# → copy the https URL, e.g. https://abc123.ngrok.io
+
+# Set in Twilio console:
+# Phone Numbers → your number → Messaging → Webhook URL:
+#   https://abc123.ngrok.io/sms   (HTTP POST)
+```
+
+On the Pi in production, either port-forward 8080 on your router or use a reverse proxy (nginx).
+
+### Config
+
+| Variable | Default | Description |
+|---|---|---|
+| `WEBHOOK_ENABLED` | `true` | Start the webhook server on launch |
+| `WEBHOOK_PORT` | `8080` | Port the Flask server listens on |
 
 ---
 
 ## Team session: building the AI brain
 
 See [`brain/agents_sdk_brain.py`](brain/agents_sdk_brain.py) for a step-by-step
-pseudo-code roadmap with all six implementation tasks clearly marked.
+pseudo-code roadmap with all seven implementation tasks clearly marked.
 
 The only file you need to edit during the session is `agents_sdk_brain.py`.
 Once it works, change one line in `wamoyager_runtime/main.py`:

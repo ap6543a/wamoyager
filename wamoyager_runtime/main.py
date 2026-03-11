@@ -184,6 +184,22 @@ def run_housekeeping(db: Any) -> None:
     )
 
 
+def start_webhook_server(cfg: Any, db: Any, brain: Any) -> None:
+    """Start the Flask inbound SMS webhook in a daemon thread."""
+    import threading
+    from services.webhook_server import create_webhook_app
+
+    app = create_webhook_app(db=db, brain=brain)
+
+    def _run() -> None:
+        # Use Flask's built-in server; swap for gunicorn/waitress in production
+        app.run(host="0.0.0.0", port=cfg.WEBHOOK_PORT, use_reloader=False)  # type: ignore[attr-defined]
+
+    thread = threading.Thread(target=_run, daemon=True, name="webhook-server")
+    thread.start()
+    logger.info("Webhook server started on port %d", cfg.WEBHOOK_PORT)
+
+
 def main() -> None:
     """Main entrypoint: configure logging, build services, start scheduler."""
     from wamoyager_runtime.config import load_config
@@ -196,6 +212,9 @@ def main() -> None:
     logger.info("Starting wamoyager. Config: %s", cfg)
 
     cfg, db, wmata, notifier, brain = build_runtime()
+
+    if cfg.WEBHOOK_ENABLED:
+        start_webhook_server(cfg, db, brain)
 
     def poll_job() -> None:
         try:

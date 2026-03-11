@@ -159,7 +159,91 @@ TASK 5 — Implement decide_incident
         # HINT: wrap json.loads in a try/except and fall back to StubBrain
         #       if the agent returns malformed output
 
-TASK 6 — Implement compose_daily_message
+TASK 6 — Implement compose_daily_message (see below)
+
+=============================================================================
+TASK 7 — Implement handle_inbound_sms  ← NEW for inbound SMS setup
+=============================================================================
+  This method powers the conversational onboarding flow.  When someone texts
+  your Twilio number for the first time, the agent guides them through setup
+  step by step using natural language instead of rigid commands.
+
+  The Runtime (inbound_handler.py) handles all DB reads/writes and user
+  creation.  The Brain just decides what to say and what data has been
+  collected.  conv_state holds where the user is in the conversation.
+
+  conv_state shape:
+    {
+      "step": "new" | "awaiting_name" | "awaiting_station" |
+              "awaiting_line" | "awaiting_confirm" | "complete",
+      "data": {
+        "name": "Alice",               ← filled in after awaiting_name
+        "station_codes": ["A01"],      ← filled in after awaiting_station
+        "lines": ["RD"],               ← filled in after awaiting_line
+        "direction": []                ← optional
+      }
+    }
+
+  Pseudocode:
+
+    def handle_inbound_sms(self, from_number, body, conv_state):
+
+        # 1. Build a prompt with the current state and the user's message
+        prompt = f"""
+        You are a friendly Metro commute assistant helping a new user sign up
+        for Wamoyager alerts via SMS.
+
+        CURRENT CONVERSATION STATE:
+        Step: {conv_state["step"]}
+        Collected so far: {json.dumps(conv_state["data"])}
+
+        USER JUST SENT: "{body}"
+
+        Your job:
+        - Understand what the user meant (be forgiving of typos)
+        - Advance the conversation toward collecting: name, station code(s), line(s)
+        - Confirm the summary before finalising
+        - Keep all replies under 160 characters
+        - Be warm and concise — this is an SMS conversation
+
+        Valid WMATA lines: RD (Red), BL (Blue), OR (Orange), SV (Silver),
+                           GR (Green), YL (Yellow)
+        Station codes are 3-character codes like A01, C05, etc.
+
+        Return a JSON object with this exact shape:
+        {{
+          "reply": "the SMS text to send back",
+          "next_step": "awaiting_name" | "awaiting_station" | "awaiting_line"
+                     | "awaiting_confirm" | "complete",
+          "data_update": {{
+            "name": "...",            ← include only fields collected in THIS turn
+            "station_codes": [...],
+            "lines": [...],
+            "direction": [...]
+          }},
+          "setup_complete": true | false   ← true only when user confirms
+        }}
+        """
+
+        # 2. Run the agent
+        result = Runner.run_sync(self.agent, prompt)
+
+        # 3. Parse the response
+        data = json.loads(result.final_output)
+
+        # 4. Map to InboundSmsResult
+        return InboundSmsResult(
+            reply=data["reply"][:160],          # enforce 160-char cap
+            next_step=data["next_step"],
+            data_update=data.get("data_update", {}),
+            setup_complete=data.get("setup_complete", False),
+        )
+
+  HINT: The agent is great at handling messy input — "red line" → "RD",
+  "metro center" → "A01" (combine with lookup_station_name tool).
+  This is where it beats the StubBrain significantly.
+
+=============================================================================
 --------------------------------------
   This method must return a DailyMessageResult dataclass.
 
@@ -236,7 +320,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from brain.interface import BrainInterface, DailyMessageResult, IncidentDecision
+from brain.interface import BrainInterface, DailyMessageResult, IncidentDecision, InboundSmsResult
 
 
 class AgentsSdkBrain(BrainInterface):
@@ -250,6 +334,7 @@ class AgentsSdkBrain(BrainInterface):
     TASK 4: Instantiate self.agent in __init__.
     TASK 5: Implement decide_incident.
     TASK 6: Implement compose_daily_message.
+    TASK 7: Implement handle_inbound_sms.
     """
 
     def __init__(self) -> None:
@@ -262,6 +347,42 @@ class AgentsSdkBrain(BrainInterface):
         #   )
         raise NotImplementedError(
             "AgentsSdkBrain.__init__: create the Agent here (see TASK 4 above)."
+        )
+
+    def handle_inbound_sms(
+        self,
+        from_number: str,
+        body: str,
+        conv_state: dict[str, Any],
+    ) -> InboundSmsResult:
+        """Guide a new user through the SMS setup conversation.
+
+        See TASK 7 in the module docstring for the full pseudocode.
+
+        Args:
+            from_number: E.164 number of the sender.
+            body:        Cleaned SMS body text.
+            conv_state:  Current state dict with keys "step" and "data".
+
+        Returns:
+            InboundSmsResult — reply text, next step, data collected this
+            turn, and a flag to trigger user creation when setup is done.
+        """
+        # TASK 7: implement this method.
+        # Rough skeleton to fill in:
+        #
+        #   import json
+        #   prompt = build_inbound_prompt(body, conv_state)
+        #   result = Runner.run_sync(self.agent, prompt)
+        #   data = json.loads(result.final_output)
+        #   return InboundSmsResult(
+        #       reply=data["reply"][:160],
+        #       next_step=data["next_step"],
+        #       data_update=data.get("data_update", {}),
+        #       setup_complete=data.get("setup_complete", False),
+        #   )
+        raise NotImplementedError(
+            "AgentsSdkBrain.handle_inbound_sms: implement this (see TASK 7 above)."
         )
 
     def decide_incident(

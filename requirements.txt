@@ -4,3 +4,4 @@ apscheduler>=3.10
 python-dotenv>=1.0
 openai-agents  # for later
 pytz
+flask>=3.0
