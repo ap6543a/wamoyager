@@ -1,0 +1,24 @@
+[Unit]
+Description=Wamoyager WMATA Alert Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/wamoyager
+EnvironmentFile=/home/pi/wamoyager/.env
+ExecStart=/home/pi/wamoyager/venv/bin/python -m wamoyager_runtime.main
+Restart=on-failure
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wamoyager
+
+# Resource limits appropriate for Raspberry Pi
+MemoryMax=256M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

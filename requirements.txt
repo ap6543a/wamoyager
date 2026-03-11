@@ -1,0 +1,6 @@
+httpx>=0.27
+twilio>=9
+apscheduler>=3.10
+python-dotenv>=1.0
+openai-agents  # for later
+pytz
