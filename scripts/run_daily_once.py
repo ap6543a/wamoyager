@@ -13,8 +13,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Force dry-run before loading config
-os.environ["DRY_RUN"] = "true"
+# DRY_RUN is read from .env — override here if you want to force a value
+# os.environ["DRY_RUN"] = "true"
 
 from dotenv import load_dotenv
 
@@ -30,7 +30,8 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     database_path = os.environ.get("DATABASE_PATH", "./wamoyager.db")
-    logger.info("Running daily cycle once (DRY_RUN=true, DATABASE_PATH=%s)", database_path)
+    dry_run = os.environ.get("DRY_RUN", "false").lower() in ("1", "true", "yes")
+    logger.info("Running daily cycle once (DRY_RUN=%s, DATABASE_PATH=%s)", dry_run, database_path)
 
     from memory.db import Database
     from services.wmata_client import WmataClient
@@ -47,7 +48,7 @@ def main() -> None:
         auth_token=cfg.TWILIO_AUTH_TOKEN,
         from_number=cfg.TWILIO_FROM_NUMBER,
         db=db,
-        dry_run=True,  # always forced
+        dry_run=cfg.DRY_RUN,
     )
     brain = StubBrain()
 
