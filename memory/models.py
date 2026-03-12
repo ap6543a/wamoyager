@@ -12,6 +12,7 @@ class User:
     id: int
     name: str
     phone_e164: str
+    email: str        # carrier gateway address e.g. 2025551234@tmomail.net
     active: bool
     timezone: str
     created_at: datetime
@@ -21,6 +22,7 @@ class User:
             "id": self.id,
             "name": self.name,
             "phone_e164": self.phone_e164,
+            "email": self.email,
             "active": self.active,
             "timezone": self.timezone,
             "created_at": self.created_at.isoformat(),

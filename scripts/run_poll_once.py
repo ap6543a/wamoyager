@@ -34,7 +34,7 @@ def main() -> None:
 
     from memory.db import Database
     from services.wmata_client import WmataClient
-    from services.notifier_twilio import TwilioNotifier
+    from services.notifier_email import EmailNotifier
     from brain.stub_brain import StubBrain
     from wamoyager_runtime.config import load_config
     from wamoyager_runtime.main import run_poll_cycle
@@ -42,12 +42,12 @@ def main() -> None:
     cfg = load_config()
     db = Database(cfg.DATABASE_PATH)
     wmata = WmataClient(api_key=cfg.WMATA_API_KEY)
-    notifier = TwilioNotifier(
-        account_sid=cfg.TWILIO_ACCOUNT_SID,
-        auth_token=cfg.TWILIO_AUTH_TOKEN,
-        from_number=cfg.TWILIO_FROM_NUMBER,
+    notifier = EmailNotifier(
+        gmail_address=cfg.GMAIL_ADDRESS,
+        app_password=cfg.GMAIL_APP_PASSWORD,
+        from_name=cfg.GMAIL_FROM_NAME,
         db=db,
-        dry_run=True,  # always forced
+        dry_run=True,  # always forced for poll test
     )
     brain = StubBrain()
 

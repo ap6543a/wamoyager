@@ -28,10 +28,10 @@ class Config:
     # WMATA
     WMATA_API_KEY: str = _get("WMATA_API_KEY", required=True)
 
-    # Twilio
-    TWILIO_ACCOUNT_SID: str = _get("TWILIO_ACCOUNT_SID", required=True)
-    TWILIO_AUTH_TOKEN: str = _get("TWILIO_AUTH_TOKEN", required=True)
-    TWILIO_FROM_NUMBER: str = _get("TWILIO_FROM_NUMBER", required=True)
+    # Gmail (email-to-SMS gateway)
+    GMAIL_ADDRESS: str = _get("GMAIL_ADDRESS", required=True)
+    GMAIL_APP_PASSWORD: str = _get("GMAIL_APP_PASSWORD", required=True)
+    GMAIL_FROM_NAME: str = _get("GMAIL_FROM_NAME", default="Wamoyager")
 
     # Database
     DATABASE_PATH: str = _get("DATABASE_PATH", default="./wamoyager.db")
@@ -56,6 +56,7 @@ class Config:
             f"POLL_INTERVAL_SECONDS={self.POLL_INTERVAL_SECONDS}, "
             f"DAILY_JOB_TIME={self.DAILY_JOB_TIME!r}, "
             f"DATABASE_PATH={self.DATABASE_PATH!r}, "
+            f"GMAIL_ADDRESS={self.GMAIL_ADDRESS!r}, "
             f"WEBHOOK_ENABLED={self.WEBHOOK_ENABLED}, "
             f"WEBHOOK_PORT={self.WEBHOOK_PORT}, "
             f"LOG_LEVEL={self.LOG_LEVEL!r})"

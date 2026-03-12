@@ -44,14 +44,14 @@ def _parse_dt(value: str) -> datetime:
 
 def get_all_active_users(db: Database) -> list[User]:
     rows = db.conn.execute(
-        "SELECT id, name, phone_e164, active, timezone, created_at FROM users WHERE active = 1"
+        "SELECT id, name, phone_e164, email, active, timezone, created_at FROM users WHERE active = 1"
     ).fetchall()
     return [_row_to_user(r) for r in rows]
 
 
 def get_user_by_id(db: Database, user_id: int) -> User | None:
     row = db.conn.execute(
-        "SELECT id, name, phone_e164, active, timezone, created_at FROM users WHERE id = ?",
+        "SELECT id, name, phone_e164, email, active, timezone, created_at FROM users WHERE id = ?",
         (user_id,),
     ).fetchone()
     return _row_to_user(row) if row else None
@@ -60,21 +60,25 @@ def get_user_by_id(db: Database, user_id: int) -> User | None:
 def create_user(
     db: Database,
     name: str,
-    phone_e164: str,
+    email: str,
+    phone_e164: str = "",
     timezone: str = "America/New_York",
 ) -> int:
     """Insert a new user and their default preferences. Returns new user id."""
+    # phone_e164 is legacy — use email as the unique fallback if not provided
+    if not phone_e164:
+        phone_e164 = email
     with db.conn:
         cur = db.conn.execute(
-            "INSERT INTO users (name, phone_e164, active, timezone, created_at) VALUES (?, ?, 1, ?, ?)",
-            (name, phone_e164, timezone, _now_utc()),
+            "INSERT INTO users (name, phone_e164, email, active, timezone, created_at) VALUES (?, ?, ?, 1, ?, ?)",
+            (name, phone_e164, email, timezone, _now_utc()),
         )
         user_id = cur.lastrowid
         db.conn.execute(
             "INSERT INTO user_preferences (user_id) VALUES (?)",
             (user_id,),
         )
-    logger.info("Created user id=%d name=%s phone=%s", user_id, name, phone_e164)
+    logger.info("Created user id=%d name=%s email=%s", user_id, name, email)
     return user_id
 
 
@@ -130,6 +134,7 @@ def _row_to_user(row: Any) -> User:
         id=row["id"],
         name=row["name"],
         phone_e164=row["phone_e164"],
+        email=row["email"],
         active=bool(row["active"]),
         timezone=row["timezone"],
         created_at=_parse_dt(row["created_at"]),
@@ -351,7 +356,7 @@ def delete_conversation_state(db: Database, phone_e164: str) -> None:
 def get_user_by_phone(db: Database, phone_e164: str) -> "User | None":
     """Look up a user by phone number."""
     row = db.conn.execute(
-        "SELECT id, name, phone_e164, active, timezone, created_at FROM users WHERE phone_e164 = ?",
+        "SELECT id, name, phone_e164, email, active, timezone, created_at FROM users WHERE phone_e164 = ?",
         (phone_e164,),
     ).fetchone()
     return _row_to_user(row) if row else None

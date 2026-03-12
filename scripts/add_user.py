@@ -2,9 +2,15 @@
 """CLI script to add a new user to the database.
 
 Usage:
-    python scripts/add_user.py --name "Alice" --phone "+12025551234"
-    python scripts/add_user.py --name "Bob" --phone "+12025559876" \
+    python scripts/add_user.py --name "Alice" --email "2025551234@tmomail.net"
+    python scripts/add_user.py --name "Bob" --email "2025559876@vtext.com" \
         --station-codes "A01,C01" --lines "RD,BL"
+
+Carrier gateway addresses:
+  T-Mobile:  <number>@tmomail.net
+  Verizon:   <number>@vtext.com
+  AT&T:      <number>@txt.att.net
+  Sprint:    <number>@messaging.sprintpcs.com
 """
 
 from __future__ import annotations
@@ -34,9 +40,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Add a new wamoyager user.")
     parser.add_argument("--name", required=True, help="User's full name")
     parser.add_argument(
-        "--phone",
+        "--email",
         required=True,
-        help="Phone number in E.164 format, e.g. +12025551234",
+        help="Carrier gateway email, e.g. 2025551234@tmomail.net",
     )
     parser.add_argument(
         "--station-codes",
@@ -75,7 +81,7 @@ def main() -> None:
         user_id = create_user(
             db=db,
             name=args.name,
-            phone_e164=args.phone,
+            email=args.email,
             timezone=args.timezone,
         )
 
@@ -93,12 +99,8 @@ def main() -> None:
         )
 
         logger.info(
-            "User created: id=%d name=%r phone=%r station_codes=%r lines=%r",
-            user_id,
-            args.name,
-            args.phone,
-            station_codes,
-            lines,
+            "User created: id=%d name=%r email=%r station_codes=%r lines=%r",
+            user_id, args.name, args.email, station_codes, lines,
         )
         print(f"User '{args.name}' created with id={user_id}")
     finally:

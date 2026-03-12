@@ -18,16 +18,16 @@ def build_runtime():
     """Build and return all runtime components without starting the scheduler."""
     from memory.db import Database
     from services.wmata_client import WmataClient
-    from services.notifier_twilio import TwilioNotifier
+    from services.notifier_email import EmailNotifier
     from brain.stub_brain import StubBrain
 
     cfg = load_config()
     db = Database(cfg.DATABASE_PATH)
     wmata = WmataClient(api_key=cfg.WMATA_API_KEY)
-    notifier = TwilioNotifier(
-        account_sid=cfg.TWILIO_ACCOUNT_SID,
-        auth_token=cfg.TWILIO_AUTH_TOKEN,
-        from_number=cfg.TWILIO_FROM_NUMBER,
+    notifier = EmailNotifier(
+        gmail_address=cfg.GMAIL_ADDRESS,
+        app_password=cfg.GMAIL_APP_PASSWORD,
+        from_name=cfg.GMAIL_FROM_NAME,
         db=db,
         dry_run=cfg.DRY_RUN,
     )
@@ -109,7 +109,7 @@ def run_poll_cycle(cfg: Any, db: Any, wmata: Any, notifier: Any, brain: Any) -> 
             )
 
             notifier.send_sms(
-                to=user_d["phone_e164"],
+                to=user_d["email"],
                 body=body,
                 user_id=user_id,
                 incident_id=incident_id,
@@ -161,7 +161,7 @@ def run_daily_cycle(cfg: Any, db: Any, wmata: Any, notifier: Any, brain: Any) ->
             continue
 
         notifier.send_sms(
-            to=user.phone_e164,
+            to=user.email,
             body=result.message,
             user_id=user.id,
             incident_id=None,
@@ -184,22 +184,6 @@ def run_housekeeping(db: Any) -> None:
     )
 
 
-def start_webhook_server(cfg: Any, db: Any, brain: Any) -> None:
-    """Start the Flask inbound SMS webhook in a daemon thread."""
-    import threading
-    from services.webhook_server import create_webhook_app
-
-    app = create_webhook_app(db=db, brain=brain)
-
-    def _run() -> None:
-        # Use Flask's built-in server; swap for gunicorn/waitress in production
-        app.run(host="0.0.0.0", port=cfg.WEBHOOK_PORT, use_reloader=False)  # type: ignore[attr-defined]
-
-    thread = threading.Thread(target=_run, daemon=True, name="webhook-server")
-    thread.start()
-    logger.info("Webhook server started on port %d", cfg.WEBHOOK_PORT)
-
-
 def main() -> None:
     """Main entrypoint: configure logging, build services, start scheduler."""
     from wamoyager_runtime.config import load_config
@@ -212,9 +196,6 @@ def main() -> None:
     logger.info("Starting wamoyager. Config: %s", cfg)
 
     cfg, db, wmata, notifier, brain = build_runtime()
-
-    if cfg.WEBHOOK_ENABLED:
-        start_webhook_server(cfg, db, brain)
 
     def poll_job() -> None:
         try:

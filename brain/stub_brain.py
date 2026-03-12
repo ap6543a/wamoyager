@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from brain.interface import BrainInterface, DailyMessageResult, IncidentDecision, InboundSmsResult
+from brain.interface import BrainInterface, DailyMessageResult, IncidentDecision
 
 logger = logging.getLogger(__name__)
 
@@ -22,106 +22,6 @@ _NOTIFY_SEVERITIES = {"MAJOR", "CRITICAL"}
 
 class StubBrain(BrainInterface):
     """Deterministic rule-based brain for pre-session use."""
-
-    # ------------------------------------------------------------------
-    # Inbound SMS setup conversation
-    # ------------------------------------------------------------------
-
-    def handle_inbound_sms(
-        self,
-        from_number: str,
-        body: str,
-        conv_state: dict,
-    ) -> InboundSmsResult:
-        step = conv_state.get("step", "new")
-        data: dict = conv_state.get("data", {})
-        body_lower = body.lower().strip()
-
-        # Step: new — greet and ask for name
-        if step == "new":
-            return InboundSmsResult(
-                reply="Welcome to Wamoyager! I'll set up your Metro alerts. What's your first name?",
-                next_step="awaiting_name",
-                data_update={},
-            )
-
-        # Step: awaiting_name — save name, ask for station code(s)
-        if step == "awaiting_name":
-            name = body.strip().title()
-            return InboundSmsResult(
-                reply=(
-                    f"Hi {name}! What's your Metro station code(s)? "
-                    "(e.g. A01 for Metro Center, A15 for Shady Grove — separate multiple with commas)"
-                ),
-                next_step="awaiting_station",
-                data_update={"name": name},
-            )
-
-        # Step: awaiting_station — save station codes, ask for line(s)
-        if step == "awaiting_station":
-            codes = [c.strip().upper() for c in body.replace(",", " ").split() if c.strip()]
-            if not codes:
-                return InboundSmsResult(
-                    reply="I didn't catch that. Please enter a station code like A01 or C01.",
-                    next_step="awaiting_station",
-                    data_update={},
-                )
-            return InboundSmsResult(
-                reply=(
-                    f"Got it — {', '.join(codes)}. "
-                    "Which line(s) do you ride? (e.g. RD, BL, OR, SV, GR, YL — separate with commas)"
-                ),
-                next_step="awaiting_line",
-                data_update={"station_codes": codes},
-            )
-
-        # Step: awaiting_line — save lines, show summary and ask to confirm
-        if step == "awaiting_line":
-            lines = [ln.strip().upper() for ln in body.replace(",", " ").split() if ln.strip()]
-            if not lines:
-                return InboundSmsResult(
-                    reply="I didn't catch that. Please enter line codes like RD or BL.",
-                    next_step="awaiting_line",
-                    data_update={},
-                )
-            name = data.get("name", "")
-            stations = data.get("station_codes", [])
-            summary = (
-                f"Ready to set up: {name}, station(s) {', '.join(stations)}, "
-                f"line(s) {', '.join(lines)}. Reply YES to confirm or NO to start over."
-            )
-            return InboundSmsResult(
-                reply=summary[:160],
-                next_step="awaiting_confirm",
-                data_update={"lines": lines},
-            )
-
-        # Step: awaiting_confirm — create user or restart
-        if step == "awaiting_confirm":
-            if body_lower in ("yes", "y", "confirm", "yep", "yeah"):
-                name = data.get("name", "Rider")
-                return InboundSmsResult(
-                    reply=(
-                        f"You're all set, {name}! "
-                        "You'll get daily Metro updates at 5pm ET. Text STOP to unsubscribe."
-                    ),
-                    next_step="complete",
-                    data_update={},
-                    setup_complete=True,
-                )
-            else:
-                return InboundSmsResult(
-                    reply="No problem! Text SETUP to start over whenever you're ready.",
-                    next_step="new",
-                    data_update={},
-                )
-
-        # Default — unrecognised state or message
-        return InboundSmsResult(
-            reply="Text SETUP to enroll for Metro alerts, or STOP to unsubscribe.",
-            next_step="new",
-            data_update={},
-        )
 
     # ------------------------------------------------------------------
     # Incident decision

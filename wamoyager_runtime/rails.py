@@ -1,4 +1,4 @@
-"""Safety rail checks enforced by the Runtime before any Twilio send."""
+"""Safety rail checks enforced by the Runtime before any message send."""
 
 from __future__ import annotations
 

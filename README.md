@@ -29,10 +29,9 @@ wamoyager/
 │
 ├── services/
 │   ├── wmata_client.py    # WMATA API calls + incident/prediction normalisation
-│   ├── notifier_twilio.py # Twilio SMS send + retries + dry-run mode
+│   ├── notifier_email.py  # Gmail SMTP send + retries + dry-run mode
 │   ├── scheduler.py       # APScheduler: poll job, daily job, housekeeping job
-│   ├── webhook_server.py  # Flask inbound SMS webhook (POST /sms)
-│   └── inbound_handler.py # Routes inbound messages to Brain, manages setup state
+│   └── webhook_server.py  # reserved for future two-way messaging (unused)
 │
 ├── memory/
 │   ├── db.py             # SQLite connection + initialisation
@@ -79,7 +78,7 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# Edit .env — fill in WMATA_API_KEY, TWILIO_* credentials
+# Edit .env — fill in WMATA_API_KEY, GMAIL_* credentials
 ```
 
 Set `DRY_RUN=true` while testing so no real SMS messages are sent.
@@ -127,14 +126,14 @@ All settings are read from environment variables (or a `.env` file at the projec
 | Variable | Default | Description |
 |---|---|---|
 | `WMATA_API_KEY` | **required** | WMATA developer API key |
-| `TWILIO_ACCOUNT_SID` | **required** | Twilio account SID |
-| `TWILIO_AUTH_TOKEN` | **required** | Twilio auth token |
-| `TWILIO_FROM_NUMBER` | **required** | Twilio sender number (E.164) |
+| `GMAIL_ADDRESS` | **required** | Gmail address to send from |
+| `GMAIL_APP_PASSWORD` | **required** | Gmail App Password (not your login password) |
+| `GMAIL_FROM_NAME` | `Wamoyager` | Display name on outgoing messages |
 | `DATABASE_PATH` | `./wamoyager.db` | Path to SQLite database file |
-| `DRY_RUN` | `false` | Log SMS instead of sending |
+| `DRY_RUN` | `false` | Log messages instead of sending |
 | `POLL_INTERVAL_SECONDS` | `120` | How often to poll WMATA |
 | `DAILY_JOB_TIME` | `17:00` | Daily message time (24h, ET) |
-| `RATE_LIMIT_MAX_PER_HOUR` | `3` | Max SMS per user per hour |
+| `RATE_LIMIT_MAX_PER_HOUR` | `3` | Max messages per user per hour |
 | `COOLDOWN_MINUTES` | `30` | Suppress repeat alerts for same incident |
 | `LOG_LEVEL` | `INFO` | Python log level |
 
@@ -168,6 +167,7 @@ brain.decide_incident(incident, users_relevant, history_recent)
 
 brain.compose_daily_message(user, predictions, system_status_summary)
     → DailyMessageResult(message)
+
 ```
 
 ### Safety rails (always enforced by Runtime, regardless of Brain)
@@ -193,50 +193,27 @@ brain.compose_daily_message(user, predictions, system_status_summary)
 
 ---
 
-## Inbound SMS: self-service user setup
+## Adding users
 
-Users can enroll themselves by texting your Twilio number. No admin needed.
-
-### Conversation flow
-
-```
-User texts: "setup"
-  → "Welcome to Wamoyager! What's your first name?"
-User texts: "Alice"
-  → "Hi Alice! What's your Metro station code(s)? (e.g. A01, A15)"
-User texts: "A01"
-  → "Got it. Which line(s) do you ride? (e.g. RD, BL, OR)"
-User texts: "RD"
-  → "Ready to set up: Alice, station A01, line RD. Reply YES to confirm."
-User texts: "yes"
-  → "You're all set! You'll get daily Metro updates at 5pm ET."
-```
-
-Other supported keywords: `STOP` / `UNSUBSCRIBE` to deactivate.
-
-### How to expose the webhook
-
-The webhook server runs on `WEBHOOK_PORT` (default `8080`).
-Twilio needs a public URL — use **ngrok** for local dev or the Pi's static IP in production:
+Users are added manually via the CLI:
 
 ```bash
-# Local dev:
-ngrok http 8080
-# → copy the https URL, e.g. https://abc123.ngrok.io
-
-# Set in Twilio console:
-# Phone Numbers → your number → Messaging → Webhook URL:
-#   https://abc123.ngrok.io/sms   (HTTP POST)
+python scripts/add_user.py \
+  --name "Alice" \
+  --email "2025551234@tmomail.net" \
+  --station-codes "A01,C01" \
+  --lines "RD"
 ```
 
-On the Pi in production, either port-forward 8080 on your router or use a reverse proxy (nginx).
+**Carrier gateway addresses:**
 
-### Config
-
-| Variable | Default | Description |
-|---|---|---|
-| `WEBHOOK_ENABLED` | `true` | Start the webhook server on launch |
-| `WEBHOOK_PORT` | `8080` | Port the Flask server listens on |
+| Carrier | Gateway |
+|---|---|
+| T-Mobile | `@tmomail.net` |
+| Verizon | `@vtext.com` |
+| AT&T | `@txt.att.net` |
+| Sprint | `@messaging.sprintpcs.com` |
+| Google Fi | `@msg.fi.google.com` |
 
 ---
 
