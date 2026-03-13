@@ -48,28 +48,7 @@ import json
 import logging
 
 
-"""
-TASK 2 — Write the system prompt
---------------------------------------
-  The prompt tells the agent its job, the urgency rules, and the message style.
-  Messages are delivered via Gmail → carrier email-to-SMS gateway → user's phone.
-"""
 
-
-
-"""
-TASK 3 — Define tools the agent can call
---------------------------------------
-  Tools let the agent read memory or look up extra WMATA data.
-  Each tool is a plain Python function decorated with @function_tool.
-
-  Pseudocode:
-"""
-
-"""
-TASK 4 — Create the Agent
---------------------------------------
-"""
 class AgentsSdkBrain(BrainInterface):
     """Agent brain backed by the OpenAI Agents SDK.
 

@@ -26,9 +26,10 @@ def build_runtime():
     db = Database(cfg.DATABASE_PATH)
     wmata = WmataClient(api_key=cfg.WMATA_API_KEY)
     notifier = EmailNotifier(
-        gmail_address=cfg.GMAIL_ADDRESS,
-        app_password=cfg.GMAIL_APP_PASSWORD,
-        from_name=cfg.GMAIL_FROM_NAME,
+        smtp_login=cfg.MAILGUN_SMTP_LOGIN,
+        smtp_password=cfg.MAILGUN_SMTP_PASSWORD,
+        from_address=cfg.MAILGUN_FROM_ADDRESS,
+        from_name=cfg.MAILGUN_FROM_NAME,
         db=db,
         dry_run=cfg.DRY_RUN,
     )

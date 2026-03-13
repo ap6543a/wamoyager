@@ -1,13 +1,11 @@
-"""Gmail SMTP notifier — sends messages to email-to-SMS gateway addresses.
+"""Mailgun SMTP notifier — sends messages to user email addresses.
 
-Each user's `email` field should be their carrier gateway address, e.g.:
-  2025551234@tmomail.net      (T-Mobile)
-  2025551234@vtext.com        (Verizon)
-  2025551234@txt.att.net      (AT&T)
-  2025551234@messaging.sprintpcs.com  (Sprint)
+Mailgun SMTP credentials are found in the Mailgun dashboard under
+Sending → Domain Settings → SMTP credentials.
 
-Gmail requires an App Password (not your normal password):
-  Google Account → Security → 2-Step Verification → App Passwords
+  MAILGUN_SMTP_LOGIN:    your Mailgun SMTP username (e.g. postmaster@mg.yourdomain.com)
+  MAILGUN_SMTP_PASSWORD: your Mailgun SMTP password
+  MAILGUN_FROM_ADDRESS:  the From address (must be authorised in your Mailgun domain)
 """
 
 from __future__ import annotations
@@ -23,32 +21,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_MAX_SMS_CHARS = 160
 _MAX_RETRIES = 2
 _RETRY_SLEEP_SECONDS = 2
-_GMAIL_SMTP_HOST = "smtp.gmail.com"
-_GMAIL_SMTP_PORT = 465
-
-
-def _truncate(body: str) -> str:
-    if len(body) <= _MAX_SMS_CHARS:
-        return body
-    return body[: _MAX_SMS_CHARS - 1] + "…"
+_MAILGUN_SMTP_HOST = "smtp.mailgun.org"
+_MAILGUN_SMTP_PORT = 587
 
 
 class EmailNotifier:
-    """Send messages via Gmail SMTP to carrier email-to-SMS gateway addresses."""
+    """Send messages via Mailgun SMTP."""
 
     def __init__(
         self,
-        gmail_address: str,
-        app_password: str,
+        smtp_login: str,
+        smtp_password: str,
+        from_address: str,
         from_name: str,
         db: "Database",
         dry_run: bool = False,
     ) -> None:
-        self._gmail_address = gmail_address
-        self._app_password = app_password
+        self._smtp_login = smtp_login
+        self._smtp_password = smtp_password
+        self._from_address = from_address
         self._from_name = from_name
         self._db = db
         self._dry_run = dry_run
@@ -61,11 +54,11 @@ class EmailNotifier:
         incident_id: int | None = None,
         notification_type: str = "incident",
     ) -> str:
-        """Send a message to a gateway email address and log it.
+        """Send a message to a user email address and log it.
 
         Args:
-            to: Carrier gateway email, e.g. "2025551234@tmomail.net".
-            body: Message text (truncated to 160 chars).
+            to: User email address.
+            body: Message text.
             user_id: DB user id for logging.
             incident_id: Optional associated incident id.
             notification_type: "incident" or "daily".
@@ -74,8 +67,6 @@ class EmailNotifier:
             "sent", "DRY_RUN", or "" on failure.
         """
         from memory.queries import log_notification, update_notification_status
-
-        body = _truncate(body)
 
         notification_id = log_notification(
             db=self._db,
@@ -110,13 +101,14 @@ class EmailNotifier:
         for attempt in range(1, _MAX_RETRIES + 2):
             try:
                 msg = MIMEText(body)
-                msg["From"] = f"{self._from_name} <{self._gmail_address}>"
+                msg["From"] = f"{self._from_name} <{self._from_address}>"
                 msg["To"] = to
-                msg["Subject"] = ""  # SMS gateways ignore the subject line
+                msg["Subject"] = "Wamoyager Alert"
 
-                with smtplib.SMTP_SSL(_GMAIL_SMTP_HOST, _GMAIL_SMTP_PORT) as server:
-                    server.login(self._gmail_address, self._app_password)
-                    server.sendmail(self._gmail_address, to, msg.as_string())
+                with smtplib.SMTP(_MAILGUN_SMTP_HOST, _MAILGUN_SMTP_PORT) as server:
+                    server.starttls()
+                    server.login(self._smtp_login, self._smtp_password)
+                    server.sendmail(self._from_address, to, msg.as_string())
                 return True
             except Exception as exc:
                 last_error = exc

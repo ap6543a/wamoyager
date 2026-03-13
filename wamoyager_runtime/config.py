@@ -28,10 +28,11 @@ class Config:
     # WMATA
     WMATA_API_KEY: str = _get("WMATA_API_KEY", required=True)
 
-    # Gmail (email-to-SMS gateway)
-    GMAIL_ADDRESS: str = _get("GMAIL_ADDRESS", required=True)
-    GMAIL_APP_PASSWORD: str = _get("GMAIL_APP_PASSWORD", required=True)
-    GMAIL_FROM_NAME: str = _get("GMAIL_FROM_NAME", default="Wamoyager")
+    # Mailgun SMTP
+    MAILGUN_SMTP_LOGIN: str = _get("MAILGUN_SMTP_LOGIN", required=True)
+    MAILGUN_SMTP_PASSWORD: str = _get("MAILGUN_SMTP_PASSWORD", required=True)
+    MAILGUN_FROM_ADDRESS: str = _get("MAILGUN_FROM_ADDRESS", required=True)
+    MAILGUN_FROM_NAME: str = _get("MAILGUN_FROM_NAME", default="Wamoyager")
 
     # Database
     DATABASE_PATH: str = _get("DATABASE_PATH", default="./wamoyager.db")
@@ -56,7 +57,7 @@ class Config:
             f"POLL_INTERVAL_SECONDS={self.POLL_INTERVAL_SECONDS}, "
             f"DAILY_JOB_TIME={self.DAILY_JOB_TIME!r}, "
             f"DATABASE_PATH={self.DATABASE_PATH!r}, "
-            f"GMAIL_ADDRESS={self.GMAIL_ADDRESS!r}, "
+            f"MAILGUN_FROM_ADDRESS={self.MAILGUN_FROM_ADDRESS!r}, "
             f"WEBHOOK_ENABLED={self.WEBHOOK_ENABLED}, "
             f"WEBHOOK_PORT={self.WEBHOOK_PORT}, "
             f"LOG_LEVEL={self.LOG_LEVEL!r})"
