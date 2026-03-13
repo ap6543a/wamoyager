@@ -36,7 +36,8 @@ def main() -> None:
     from memory.db import Database
     from services.wmata_client import WmataClient
     from services.notifier_email import EmailNotifier
-    from brain.stub_brain import StubBrain
+    # from brain.stub_brain import StubBrain
+    from brain.agents_sdk_brain import AgentsSdkBrain
     from wamoyager_runtime.config import load_config
     from wamoyager_runtime.main import run_daily_cycle
 
@@ -50,7 +51,7 @@ def main() -> None:
         db=db,
         dry_run=cfg.DRY_RUN,
     )
-    brain = StubBrain()
+    brain = AgentsSdkBrain(db=db)
 
     try:
         run_daily_cycle(cfg, db, wmata, notifier, brain)

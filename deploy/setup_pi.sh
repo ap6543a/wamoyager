@@ -35,6 +35,6 @@ sudo systemctl enable "$SERVICE_NAME"
 
 echo ""
 echo "Setup complete!"
-echo "Edit $REPO_DIR/.env with your WMATA_API_KEY and Twilio credentials, then run:"
+echo "Edit $REPO_DIR/.env with your WMATA_API_KEY and GMAIL_* credentials, then run:"
 echo "  sudo systemctl start $SERVICE_NAME"
 echo "  sudo journalctl -u $SERVICE_NAME -f"

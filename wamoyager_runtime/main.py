@@ -19,7 +19,8 @@ def build_runtime():
     from memory.db import Database
     from services.wmata_client import WmataClient
     from services.notifier_email import EmailNotifier
-    from brain.stub_brain import StubBrain
+    # from brain.stub_brain import StubBrain
+    from brain.agents_sdk_brain import AgentsSdkBrain
 
     cfg = load_config()
     db = Database(cfg.DATABASE_PATH)
@@ -31,7 +32,7 @@ def build_runtime():
         db=db,
         dry_run=cfg.DRY_RUN,
     )
-    brain = StubBrain()
+    brain = AgentsSdkBrain(db=db)
     return cfg, db, wmata, notifier, brain
 
 
