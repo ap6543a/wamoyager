@@ -1,497 +1,389 @@
-"""OpenAI Agents SDK brain — BUILD THIS during the team session.
+"""OpenAI Agents SDK brain — production implementation.
 
-=============================================================================
-TEAM SESSION ROADMAP
-=============================================================================
+Two-agent pipeline:
+    IncidentClassifier — decides notify / urgency / audience using targeted DB tools
+    MessageComposer    — writes the SMS with a 160-char output guardrail
 
-This file is the only one you need to touch.  Everything else (scheduler,
-Gmail notifier, DB, safety rails) is already wired up and working.
-
-GOAL: Replace the deterministic StubBrain with an AI agent that uses the
-OpenAI Agents SDK to make smarter decisions about incident urgency and compose
-more natural-sounding daily commute messages.
-
-HOW TO SWAP IN: Once this class works, open wamoyager_runtime/main.py and
-change two lines:
-
-    # FROM:
-    from brain.stub_brain import StubBrain
-    brain = StubBrain()
-
-    # TO:
+Swap in via wamoyager_runtime/main.py:
     from brain.agents_sdk_brain import AgentsSdkBrain
-    brain = AgentsSdkBrain()
-
-That's it.  The Runtime, Gmail notifier, DB, and scheduler are untouched.
-
-=============================================================================
-IMPLEMENTATION TASKS (complete in order)
-=============================================================================
-
-TASK 1 — Install and import the SDK
---------------------------------------
-  pip install openai-agents   (already in requirements.txt) CHECK
-
-  Pseudocode:
-    from agents import Agent, Runner, function_tool
-    import openai
-    openai.api_key = os.environ["OPENAI_API_KEY"]   # add to .env
+    brain = AgentsSdkBrain(db)
 """
+
 from __future__ import annotations
-from agents import Agent, Runner, function_tool
-import openai
-import os
-openai.api_key = os.environ["OPENAI_API_KEY"]
-from typing import Any
-from brain.interface import BrainInterface, DailyMessageResult, IncidentDecision
+
 import json
 import logging
+import os
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from agents import (
+    Agent,
+    GuardrailFunctionOutput,
+    OutputGuardrailTripwireTriggered,
+    Runner,
+    RunContextWrapper,
+    function_tool,
+    output_guardrail,
+)
+from pydantic import BaseModel
+
+from brain.interface import BrainInterface, DailyMessageResult, IncidentDecision
+
+logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Structured output models
+# ---------------------------------------------------------------------------
+
+class ClassifierOutput(BaseModel):
+    notify: bool
+    urgency_level: str          # INFO | MINOR | MAJOR | CRITICAL
+    audience_user_ids: list[int]
+    rationale: str
+
+
+class ComposerOutput(BaseModel):
+    message: str
+
+
+# ---------------------------------------------------------------------------
+# Output guardrail — trips if message exceeds 160 chars
+# ---------------------------------------------------------------------------
+
+@output_guardrail
+def sms_length_guardrail(
+    ctx: RunContextWrapper, agent: Agent, output: ComposerOutput
+) -> GuardrailFunctionOutput:
+    """Trips when the composed message would exceed the SMS character limit."""
+    return GuardrailFunctionOutput(
+        output_info=output,
+        tripwire_triggered=len(output.message) > 160,
+    )
+
+
+# ---------------------------------------------------------------------------
+# System prompts
+# ---------------------------------------------------------------------------
+
+_CLASSIFIER_PROMPT = """
+You are the IncidentClassifier for Wamoyager, a WMATA Metrorail commute alert system.
+
+Your job is to evaluate a Metro incident and decide:
+1. Whether commuters should be notified at all
+2. The urgency level
+3. Which subscribed users are actually affected
+
+URGENCY LEVELS:
+    CRITICAL — station closure, total line suspension, safety incident
+    MAJOR    — significant delay (>10 min), single-tracking, major disruption
+    MINOR    — minor delay (<10 min), slow speeds, partial disruption
+    INFO     — informational only, no immediate impact
+
+NOTIFICATION RULES:
+    - Only notify if urgency is MAJOR or CRITICAL
+    - Only include users whose subscribed lines overlap with lines_affected
+    - Users with no line preference should be included for CRITICAL only
+    - Do NOT notify for an incident already in recent history at the same or higher severity
+    - Use your tools to check per-user notification history and line severity trends
+      before finalizing your decision
+""".strip()
+
+_COMPOSER_PROMPT = """
+You are the MessageComposer for Wamoyager, a WMATA Metrorail commute alert system.
+
+Your job is to write concise, clear SMS messages for Metro commuters.
+
+STRICT RULES:
+    - Maximum 155 characters (hard SMS limit is 160; leave margin)
+    - Always name the affected line (e.g. "Red Line", "Blue Line")
+    - Include estimated delay or impact if known
+    - For daily messages: greet by first name, list up to 3 trains (line, destination, min away)
+    - Include exactly one emoji
+    - Daily messages on weekdays only (Mon–Fri)
+
+FORMAT:
+    Incident alert  → "[MAJOR] Red Line: 15 min delays, single-tracking at Farragut. 🚇"
+    Daily message   → "Hi Alice! 🚇 Red: Shady Grove 3 min, 11 min. No alerts."
+""".strip()
+
+
+# ---------------------------------------------------------------------------
+# Brain
+# ---------------------------------------------------------------------------
 
 class AgentsSdkBrain(BrainInterface):
-    """Agent brain backed by the OpenAI Agents SDK.
+    """Production AI brain backed by the OpenAI Agents SDK.
 
-    See the module-level docstring above for the full step-by-step build guide.
-
-    TASK 1: Add imports (agents, openai, json, os) at the top of the file.
-    TASK 2: Define SYSTEM_PROMPT as a module-level string.
-    TASK 3: Define tool functions with @function_tool.
-    TASK 4: Instantiate self.agent in __init__.
-    TASK 5: Implement decide_incident.
-    TASK 6: Implement compose_daily_message.
+    Two-agent pipeline:
+        IncidentClassifier — decides notify/urgency/audience using targeted DB tools
+        MessageComposer    — writes the SMS with a 160-char output guardrail
     """
 
+    def __init__(self, db) -> None:
+        self._db = db
+        tools = self._build_tools()
 
-    def __init__(self, db):
-        global _db 
-        _db = db
-
-        SYSTEM_PROMPT= """
-        You are Wamoyager, a WMATA Metrorail commute assistant.
-        You receive structured data about Metro incidents or train predictions
-        and you decide how to alert commuters via text message. Only provide daily messages
-        Monday through Friday.
-
-        URGENCY LEVELS:
-            CRITICAL — station closure, total line suspension, safety incident
-            MAJOR    — significant delay (>10 min), single-tracking, major disruption
-            MINOR    — minor delay (<10 min), slow speeds, partial disruption
-            INFO     — informational only, no immediate impact
-
-        INCIDENT NOTIFICATION RULES:
-            - Notify users if urgency is MAJOR or CRITICAL
-            - Only notify users whose subscribed lines match lines_affected
-            (if a user has no line preference, notify them of everything critical)
-            - Be specific: mention the line, direction, and estimated delay if known
-            - Do NOT include personal data or speculative information
-
-        DAILY MESSAGE STYLE:
-            - Friendly, brief, first-name greeting
-            - Provide train cars that are departing within 20 minutes of alert time
-            - List only 3 trains: line, destination, minutes away
-            - Only show trains departures you could catch if you were walking from the National Gallery of Art, Washington DC 
-            - Mention any new active alerts or updates after the last service alert affecting the user's line or preferred stations
-            - Always include an emoji in the response
-            - Always include one fun fact about the Voyager 1 or Voyager 2 spacecraft.
-        """
-
-        self.agent = Agent(
-            name="WamoyagerBrain",
-            instructions=SYSTEM_PROMPT,
-            tools=[self.read_agent_state, self.write_agent_state, self.lookup_station_name],
-            model="gpt-4.1-nano",   #gpt-4.1-mini is next best for cost (THIS IS TIED TO ADAM'S CC)
+        self._classifier_agent = Agent(
+            name="IncidentClassifier",
+            instructions=_CLASSIFIER_PROMPT,
+            tools=tools,
+            output_type=ClassifierOutput,
+            model="gpt-4.1-nano",
         )
 
-    #TODO update build runtime
-        # raise NotImplementedError(
-        #     "AgentsSdkBrain.__init__: create the Agent here (see TASK 4 above)."
-        # )
+        self._composer_agent = Agent(
+            name="MessageComposer",
+            instructions=_COMPOSER_PROMPT,
+            output_type=ComposerOutput,
+            output_guardrails=[sms_length_guardrail],
+            model="gpt-4.1-nano",
+        )
 
-    @function_tool
-    def read_agent_state(key: str) -> str:
-        #open DB connection, SELECT value FROM agent_state WHERE key=key
-        from memory.queries import get_agent_state
+    # -----------------------------------------------------------------------
+    # Tool factory — closures over self._db; no globals, no thread-safety issues
+    # -----------------------------------------------------------------------
 
-        #return value or empty string if not found
+    def _build_tools(self) -> list:
+        db = self._db
+
+        @function_tool
+        def read_agent_state(key: str) -> str:
+            """Read a value from persistent agent memory by key."""
+            from memory.queries import get_agent_state
+            try:
+                return get_agent_state(db, key) or ""
+            except Exception as exc:
+                logger.warning("read_agent_state(%r) failed: %s", key, exc)
+                return ""
+
+        @function_tool
+        def write_agent_state(key: str, value: str) -> str:
+            """Write a value to persistent agent memory."""
+            from memory.queries import set_agent_state
+            try:
+                set_agent_state(db, key, value)
+                return "ok"
+            except Exception as exc:
+                logger.warning("write_agent_state(%r) failed: %s", key, exc)
+                return f"error: {exc}"
+
+        @function_tool
+        def lookup_station_name(station_code: str) -> str:
+            """Convert a WMATA station code (e.g. A01) to a human-readable station name."""
+            stations = {
+                "A01": "Metro Center", "A02": "Farragut North", "A03": "Dupont Circle",
+                "A04": "Woodley Park-Zoo/Adams Morgan", "A05": "Cleveland Park",
+                "A06": "Van Ness-UDC", "A07": "Tenleytown-AU", "A08": "Friendship Heights",
+                "A09": "Bethesda", "A10": "Medical Center", "A11": "Grosvenor-Strathmore",
+                "A12": "North Bethesda", "A13": "Twinbrook", "A14": "Rockville",
+                "A15": "Shady Grove",
+                "B01": "Gallery Pl-Chinatown", "B02": "Judiciary Square",
+                "B03": "Union Station", "B04": "Rhode Island Ave-Brentwood",
+                "B05": "Brookland-CUA", "B06": "Fort Totten", "B07": "Takoma",
+                "B08": "Silver Spring", "B09": "Forest Glen", "B10": "Wheaton",
+                "B11": "Glenmont", "B35": "NoMa-Gallaudet U",
+                "C01": "Metro Center", "C02": "McPherson Square", "C03": "Farragut West",
+                "C04": "Foggy Bottom-GWU", "C05": "Rosslyn", "C06": "Arlington Cemetery",
+                "C07": "Pentagon", "C08": "Pentagon City", "C09": "Crystal City",
+                "C10": "DCA", "C11": "Potomac Yard", "C12": "Braddock Road",
+                "C13": "King St-Old Town", "C14": "Eisenhower Avenue", "C15": "Huntington",
+                "D01": "Federal Triangle", "D02": "Smithsonian", "D03": "L'Enfant Plaza",
+                "D04": "Federal Center SW", "D05": "Capitol South", "D06": "Eastern Market",
+                "D07": "Potomac Ave", "D08": "Stadium-Armory", "D09": "Minnesota Ave",
+                "D10": "Deanwood", "D11": "Cheverly", "D12": "Landover",
+                "D13": "New Carrollton",
+                "E01": "Mt Vernon Sq 7th St-Convention Center", "E02": "Shaw-Howard U",
+                "E03": "U Street/African-Amer Civil War Memorial/Cardozo",
+                "E04": "Columbia Heights", "E05": "Georgia Ave-Petworth",
+                "E06": "Fort Totten", "E07": "West Hyattsville",
+                "E08": "Hyattsville Crossing", "E09": "College Park-U of Md",
+                "E10": "Greenbelt",
+                "F01": "Gallery Pl-Chinatown",
+                "F02": "Archives-Navy Memorial-Penn Quarter",
+                "F03": "L'Enfant Plaza", "F04": "Waterfront",
+                "F05": "Navy Yard-Ballpark", "F06": "Anacostia",
+                "F07": "Congress Heights", "F08": "Southern Avenue",
+                "F09": "Naylor Road", "F10": "Suitland", "F11": "Branch Ave",
+                "G01": "Benning Road", "G02": "Capitol Heights",
+                "G03": "Addison Road-Seat Pleasant", "G04": "Morgan Boulevard",
+                "G05": "Downtown Largo",
+                "J02": "Van Dorn Street", "J03": "Franconia-Springfield",
+                "K01": "Court House", "K02": "Clarendon", "K03": "Virginia Square-GMU",
+                "K04": "Ballston-MU", "K05": "East Falls Church",
+                "K06": "West Falls Church", "K07": "Dunn Loring-Merrifield",
+                "K08": "Vienna/Fairfax-GMU",
+                "N01": "McLean", "N02": "Tysons", "N03": "Greensboro",
+                "N04": "Spring Hill", "N06": "Wiehle-Reston East",
+                "N07": "Reston Town Center", "N08": "Herndon",
+                "N09": "Innovation Center",
+                "N10": "Washington Dulles International Airport",
+                "N11": "Loudoun Gateway", "N12": "Ashburn",
+            }
+            return stations.get(station_code.upper(), f"Station {station_code}")
+
+        @function_tool
+        def get_notification_history_for_user(user_id: int, hours: int = 24) -> str:
+            """Get recent notifications sent to a user (last N hours).
+            Returns a JSON list of {type, body snippet, sent_at}."""
+            from memory.queries import get_notifications_for_user_since
+            try:
+                since = datetime.now(timezone.utc) - timedelta(hours=hours)
+                notifications = get_notifications_for_user_since(db, user_id, since)
+                if not notifications:
+                    return "[]"
+                return json.dumps([
+                    {"type": n.type, "body": n.body[:80], "sent_at": str(n.created_at)}
+                    for n in notifications[:10]
+                ])
+            except Exception as exc:
+                logger.warning("get_notification_history_for_user(%d) failed: %s", user_id, exc)
+                return "[]"
+
+        @function_tool
+        def get_line_severity_trend(line_code: str) -> str:
+            """Get recent incident severity history for a Metro line.
+            Returns a JSON list of the last 5 incidents with title, severity, and first_seen."""
+            from memory.queries import get_recent_incidents
+            try:
+                incidents = get_recent_incidents(db, limit=20)
+                relevant = [
+                    {
+                        "title": i.normalized_json.get("title", ""),
+                        "severity": i.severity,
+                        "first_seen": str(i.first_seen),
+                    }
+                    for i in incidents
+                    if line_code.upper() in (i.normalized_json.get("lines_affected") or [])
+                ]
+                if not relevant:
+                    return f"No recent incidents for {line_code}."
+                return json.dumps(relevant[-5:])
+            except Exception as exc:
+                logger.warning("get_line_severity_trend(%r) failed: %s", line_code, exc)
+                return "[]"
+
+        @function_tool
+        def get_active_incident_count() -> str:
+            """Return the number of incidents active in the last 2 hours."""
+            from memory.queries import get_recent_incidents
+            try:
+                incidents = get_recent_incidents(db, limit=50)
+                cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+                active = [i for i in incidents if i.last_seen >= cutoff]
+                return str(len(active))
+            except Exception as exc:
+                logger.warning("get_active_incident_count failed: %s", exc)
+                return "0"
+
+        return [
+            read_agent_state,
+            write_agent_state,
+            lookup_station_name,
+            get_notification_history_for_user,
+            get_line_severity_trend,
+            get_active_incident_count,
+        ]
+
+    # -----------------------------------------------------------------------
+    # BrainInterface implementation
+    # -----------------------------------------------------------------------
+
+    def decide_incident(
+        self,
+        incident: dict[str, Any],
+        users_relevant: list[dict[str, Any]],
+        history_recent: list[dict[str, Any]],
+    ) -> IncidentDecision:
         try:
-            value = get_agent_state(_db, key)
-            return value
-        except:
-            return ""
-
-    @function_tool
-    def write_agent_state(key: str, value: str) -> str:
-        # PSEUDO: UPSERT into agent_state (key, value, updated_at=now)
-        from memory.queries import set_agent_state
-        try:
-            set_agent_state(_db, key, value)
-            print("ok")
-        except:
-            print("agent state not set")
-
-
-    @function_tool
-    def lookup_station_name(station_code: str) -> str:
-        # PSEUDO: return a human-readable station name for a WMATA station code
-        # PSEUDO: use a hardcoded dict or call WMATA Station Information API
-        # Example: "A01" → "Metro Center"
-
-        stations = {
-            "A01":"Metro Center",
-            "A02":"Farragut North",
-            "A03":"Dupont Circle",
-            "A04":"Woodley Park-Zoo/Adams Morgan",
-            "A05":"Cleveland Park",
-            "A06":"Van Ness-UDC",
-            "A07":"Tenleytown-AU",
-            "A08":"Friendship Heights",
-            "A09":"Bethesda",
-            "A10":"Medical Center",
-            "A11":"Grosvenor-Strathmore",
-            "A12":"North Bethesda",
-            "A13":"Twinbrook",
-            "A14":"Rockville",
-            "A15":"Shady Grove",
-            "B01":"Gallery Pl-Chinatown",
-            "B02":"Judiciary Square",
-            "B03":"Union Station",
-            "B04":"Rhode Island Ave-Brentwood",
-            "B05":"Brookland-CUA",
-            "B06":"Fort Totten",
-            "B07":"Takoma",
-            "B08":"Silver Spring",
-            "B09":"Forest Glen",
-            "B10":"Wheaton",
-            "B11":"Glenmont",
-            "B35":"NoMa-Gallaudet U",
-            "C01":"Metro Center",
-            "C02":"McPherson Square",
-            "C03":"Farragut West",
-            "C04":"Foggy Bottom-GWU",
-            "C05":"Rosslyn",
-            "C06":"Arlington Cemetery",
-            "C07":"Pentagon",
-            "C08":"Pentagon City",
-            "C09":"Crystal City",
-            "C10":"DCA",
-            "C11":"Potomac Yard",
-            "C12":"Braddock Road",
-            "C13":"King St-Old Town",
-            "C14":"Eisenhower Avenue",
-            "C15":"Huntington",
-            "D01":"Federal Triangle",
-            "D02":"Smithsonian",
-            "D03":"L'Enfant Plaza",
-            "D04":"Federal Center SW",
-            "D05":"Capitol South",
-            "D06":"Eastern Market",
-            "D07":"Potomac Ave",
-            "D08":"Stadium-Armory",
-            "D09":"Minnesota Ave",
-            "D10":"Deanwood",
-            "D11":"Cheverly",
-            "D12":"Landover",
-            "D13":"New Carrollton",
-            "E01":"Mt Vernon Sq 7th St-Convention Center",
-            "E02":"Shaw-Howard U",
-            "E03":"U Street/African-Amer Civil War Memorial/Cardozo",
-            "E04":"Columbia Heights",
-            "E05":"Georgia Ave-Petworth",
-            "E06":"Fort Totten",
-            "E07":"West Hyattsville",
-            "E08":"Hyattsville Crossing",
-            "E09":"College Park-U of Md",
-            "E10":"Greenbelt",
-            "F01":"Gallery Pl-Chinatown",
-            "F02":"Archives-Navy Memorial-Penn Quarter",
-            "F03":"L'Enfant Plaza",
-            "F04":"Waterfront",
-            "F05":"Navy Yard-Ballpark",
-            "F06":"Anacostia",
-            "F07":"Congress Heights",
-            "F08":"Southern Avenue",
-            "F09":"Naylor Road",
-            "F10":"Suitland",
-            "F11":"Branch Ave",
-            "G01":"Benning Road",
-            "G02":"Capitol Heights",
-            "G03":"Addison Road-Seat Pleasant",
-            "G04":"Morgan Boulevard",
-            "G05":"Downtown Largo",
-            "J02":"Van Dorn Street",
-            "J03":"Franconia-Springfield",
-            "K01":"Court House",
-            "K02":"Clarendon",
-            "K03":"Virginia Square-GMU",
-            "K04":"Ballston-MU",
-            "K05":"East Falls Church",
-            "K06":"West Falls Church",
-            "K07":"Dunn Loring-Merrifield",
-            "K08":"Vienna/Fairfax-GMU",
-            "N01":"McLean",
-            "N02":"Tysons",
-            "N03":"Greensboro",
-            "N04":"Spring Hill",
-            "N06":"Wiehle-Reston East",
-            "N07":"Reston Town Center",
-            "N08":"Herndon",
-            "N09":"Innovation Center",
-            "N10":"Washington Dulles International Airport",
-            "N11":"Loudoun Gateway",
-            "N12":"Ashburn"
-        }
-        return stations.get(station_code.upper(), f"Station {station_code}")
-    """
-    Optional / stretch tools:
-    """
-    @function_tool
-    def get_recent_notifications_for_user(user_id: int) -> str:
-        # PSEUDO: query notifications table for last N notifications for this user
-        # PSEUDO: return a JSON string summary (type, body, created_at)
-        print("stretch goal")
-        pass
-    """
-    TASK 5 — Implement decide_incident
-    --------------------------------------
-    This method must return an IncidentDecision dataclass.
-
-    """
-    def decide_incident(self, incident, users_relevant, history_recent):
-
-        # 1. Build a structured prompt describing the incident
-
-        prompt = f"""
-        INCIDENT:
-        {json.dumps(incident, indent=2)}
-
-        ACTIVE USERS (with their line subscriptions):
-        {json.dumps(users_relevant, indent=2)}
-
-        RECENT NOTIFICATION HISTORY (for deduplication context):
-        {json.dumps(history_recent[-10:], indent=2)}
-
-        Task: Decide whether to notify users about this incident.
-        Return a JSON object with this exact shape:
-        {{
-          "notify": true or false,
-          "urgency_level": "INFO" | "MINOR" | "MAJOR" | "CRITICAL",
-          "audience_user_ids": [list of user id integers],
-          "message_all": "the message text or null"
-        }}
-        """
-        print(prompt)
-        try:
-            # 2. Run the agent synchronously
-            result = Runner.run_sync(self.agent, prompt)
-            print("Running the agent synchronously")
-            # 3. Parse the agent's text output as JSON
-            data = json.loads(result.final_output)             # parse to dict
-
-            # 4. Map parsed dict → IncidentDecision dataclass
-            return IncidentDecision(
-                notify=data["notify"],
-                urgency_level=data["urgency_level"],
-                audience_user_ids=data.get("audience_user_ids", []),
-                messages={},
-                message_all=data.get("message_all"),
+            # Step 1: Classifier decides notify / urgency / audience
+            classifier_prompt = (
+                f"INCIDENT:\n{json.dumps(incident, indent=2)}\n\n"
+                f"SUBSCRIBED USERS:\n{json.dumps(users_relevant, indent=2)}\n\n"
+                f"RECENT INCIDENT HISTORY (last 10):\n{json.dumps(history_recent[-10:], indent=2)}\n\n"
+                "Classify this incident and select the affected audience."
             )
-        except:
-            print("decision failed - decide_incident()")
-#TODO add exception logic for failure
+            classification: ClassifierOutput = Runner.run_sync(
+                self._classifier_agent, classifier_prompt
+            ).final_output
 
+            if not classification.notify:
+                logger.info(
+                    "Classifier suppressed notification: urgency=%s reason=%r",
+                    classification.urgency_level,
+                    classification.rationale,
+                )
+                return IncidentDecision(
+                    notify=False,
+                    urgency_level=classification.urgency_level,
+                    audience_user_ids=[],
+                    messages={},
+                    message_all=None,
+                )
 
-        # HINT: wrap json.loads in a try/except and fall back to StubBrain
-        #       if the agent returns malformed output
+            # Step 2: Composer writes the SMS for the selected audience
+            audience = [u for u in users_relevant if u["id"] in classification.audience_user_ids]
+            composer_prompt = (
+                f"Write a {classification.urgency_level} incident alert SMS.\n\n"
+                f"INCIDENT:\n{json.dumps(incident, indent=2)}\n\n"
+                f"AUDIENCE ({len(audience)} user(s) — "
+                f"{', '.join(u['name'] for u in audience)}):\n"
+                f"{json.dumps(audience, indent=2)}"
+            )
+            try:
+                message = Runner.run_sync(
+                    self._composer_agent, composer_prompt
+                ).final_output.message
+            except OutputGuardrailTripwireTriggered as exc:
+                raw: ComposerOutput = exc.guardrail_result.output.output_info
+                message = raw.message[:159] + "…"
+                logger.warning("Incident message truncated to %d chars", len(message))
 
-    """
-    TASK 6 — Implement compose_daily_message
-    --------------------------------------
-    This method must return a DailyMessageResult dataclass.
-    """
-    def compose_daily_message(self, user, predictions, system_status_summary):
+            return IncidentDecision(
+                notify=True,
+                urgency_level=classification.urgency_level,
+                audience_user_ids=classification.audience_user_ids,
+                messages={},
+                message_all=message,
+            )
 
-        # 1. Build a structured prompt with user context and train data
-        prompt = f"""
-        USER:
-        {json.dumps(user, indent=2)}
+        except Exception as exc:
+            logger.error("decide_incident failed: %s", exc, exc_info=True)
+            return IncidentDecision(
+                notify=False,
+                urgency_level="INFO",
+                audience_user_ids=[],
+                messages={},
+                message_all=None,
+            )
 
-        UPCOMING TRAINS (real-time predictions):
-        {json.dumps(predictions, indent=2)}
-
-        SYSTEM STATUS SUMMARY: {system_status_summary or "No active alerts."}
-
-        Task: Compose a friendly daily commute SMS for this user.
-        - Greet them by first name
-        - Note any relevant alerts if present
-        - Always recommend a song for the commute but do not repeat a song across users
-        Return only the message text, no JSON wrapper.
-        """
-#TODO: see if this conflict with system prompt message (daily messaging style)
+    def compose_daily_message(
+        self,
+        user: dict[str, Any],
+        predictions: list[dict[str, Any]],
+        system_status_summary: str | None,
+    ) -> DailyMessageResult:
         try:
-            # 2. Run the agent
-            result = Runner.run_sync(self.agent, prompt)
+            prompt = (
+                f"USER:\n{json.dumps(user, indent=2)}\n\n"
+                f"UPCOMING TRAINS:\n{json.dumps(predictions, indent=2)}\n\n"
+                f"SYSTEM STATUS: {system_status_summary or 'No active alerts.'}\n\n"
+                "Compose the daily 5pm commute SMS for this user."
+            )
+            try:
+                message = Runner.run_sync(
+                    self._composer_agent, prompt
+                ).final_output.message
+            except OutputGuardrailTripwireTriggered as exc:
+                raw: ComposerOutput = exc.guardrail_result.output.output_info
+                message = raw.message[:159] + "…"
+                logger.warning("Daily message truncated to %d chars", len(message))
 
-            # 3. Return the message text
-            message = result.final_output.strip()
-
-            # # 4. Hard cap at 160 chars as a safety rail
-            # if len(message) > 160:
-            #     message = message[:159] + "…"
-            
             return DailyMessageResult(message=message)
-#TODO: see if we get hard cap on message 
-        except Exception as e:
-            logging.getLogger(__name__).error("AgentsSdkBrain.compose_daily_message failed: %s", e)
-            return DailyMessageResult(message="hey it's broken")
-        
-"""
-=============================================================================
-TESTING YOUR IMPLEMENTATION
-=============================================================================
 
-After implementing:
-
-  # Quick unit test (dry-run, no real emails sent, no live WMATA):
-  python scripts/run_poll_once.py
-
-  # Daily message dry-run:
-  python scripts/run_daily_once.py
-
-  # Check the notifications table to see what would have been sent:
-  python - <<'EOF'
-  import sqlite3
-  conn = sqlite3.connect("wamoyager.db")
-  conn.row_factory = sqlite3.Row
-  for r in conn.execute("SELECT * FROM notifications ORDER BY created_at DESC LIMIT 10").fetchall():
-      print(dict(r))
-  EOF
-
-=============================================================================
-STRETCH GOALS (if time allows)
-=============================================================================
-
-  A. Per-user messages instead of message_all
-     — Remove message_all, populate messages dict keyed by user_id
-     — Allows personalised tone ("Alice, your Red Line train..." vs generic)
-
-  B. Agent memory between polls
-     — Use write_agent_state to store last severity per fingerprint
-     — Use read_agent_state in the prompt so agent knows if this is new or escalating
-
-  C. Multi-step agent (handoffs)
-     — Create a "classifier" agent and a "composer" agent
-     — Classifier decides notify/urgency; Composer writes the SMS text
-     — Demonstrates agent handoffs with the OpenAI Agents SDK
-
-=============================================================================
-"""
-
-# from __future__ import annotations
-
-# from typing import Any
-
-# from brain.interface import BrainInterface, DailyMessageResult, IncidentDecision
-
-
-# class AgentsSdkBrain(BrainInterface):
-#     """Agent brain backed by the OpenAI Agents SDK.
-
-#     See the module-level docstring above for the full step-by-step build guide.
-
-#     TASK 1: Add imports (agents, openai, json, os) at the top of the file.
-#     TASK 2: Define SYSTEM_PROMPT as a module-level string.
-#     TASK 3: Define tool functions with @function_tool.
-#     TASK 4: Instantiate self.agent in __init__.
-#     TASK 5: Implement decide_incident.
-#     TASK 6: Implement compose_daily_message.
-#     """
-
-#     def __init__(self, db):
-#         global _db 
-#         _db = db
-
-#         self.agent = Agent(
-#             name="WamoyagerBrain",
-#             instructions=SYSTEM_PROMPT,
-#             tools=[read_agent_state, write_agent_state, lookup_station_name],
-#             model="gpt-4o-mini",   # or "gpt-4o-mini" for lower cost (THIS IS TIED TO ADAM'S CC)
-#         )
-
-#     #TODO update build runtime
-#         raise NotImplementedError(
-#             "AgentsSdkBrain.__init__: create the Agent here (see TASK 4 above)."
-#         )
-
-    # def decide_incident(
-    #     self,
-    #     incident: dict[str, Any],
-    #     users_relevant: list[dict[str, Any]],
-    #     history_recent: list[dict[str, Any]],
-    # ) -> IncidentDecision:
-    #     """Decide whether and how to notify users about a WMATA incident.
-
-    #     See TASK 5 in the module docstring for the full pseudocode.
-
-    #     Args:
-    #         incident:        normalized incident dict (fingerprint, title,
-    #                          description, lines_affected, severity, raw)
-    #         users_relevant:  list of active user dicts, each with a
-    #                          "preferences" key containing lines, station_codes,
-    #                          and direction
-    #         history_recent:  last ~50 known incidents (for dedup context)
-
-    #     Returns:
-    #         IncidentDecision — notify flag, urgency level, audience IDs,
-    #         and message text.
-    #     """
-    #     # TASK 5: implement this method.
-    #     # Rough skeleton to fill in:
-    #     #
-    #     #   import json
-    #     #   prompt = build_incident_prompt(incident, users_relevant, history_recent)
-    #     #   result = Runner.run_sync(self.agent, prompt)
-    #     #   data = json.loads(result.final_output)
-    #     #   return IncidentDecision(
-    #     #       notify=data["notify"],
-    #     #       urgency_level=data["urgency_level"],
-    #     #       audience_user_ids=data.get("audience_user_ids", []),
-    #     #       messages={},
-    #     #       message_all=data.get("message_all"),
-    #     #   )
-    #     raise NotImplementedError(
-    #         "AgentsSdkBrain.decide_incident: implement this (see TASK 5 above)."
-    #     )
-
-    # def compose_daily_message(
-    #     self,
-    #     user: dict[str, Any],
-    #     predictions: list[dict[str, Any]],
-    #     system_status_summary: str | None,
-    # ) -> DailyMessageResult:
-    #     """Compose the daily 5pm next-train SMS for a user.
-
-    #     See TASK 6 in the module docstring for the full pseudocode.
-
-    #     Args:
-    #         user:                   user dict merged with preferences
-    #                                 (name, email, preferences.lines,
-    #                                  preferences.station_codes, preferences.direction)
-    #         predictions:            real-time train predictions for user's stations
-    #                                 (station_code, destination, line, minutes, car_count)
-    #         system_status_summary:  optional brief system-wide status string
-
-    #     Returns:
-    #         DailyMessageResult with the SMS text (max 160 chars).
-    #     """
-    #     # TASK 6: implement this method.
-    #     # Rough skeleton to fill in:
-    #     #
-    #     #   import json
-    #     #   prompt = build_daily_prompt(user, predictions, system_status_summary)
-    #     #   result = Runner.run_sync(self.agent, prompt)
-    #     #   message = result.final_output.strip()[:160]
-    #     #   return DailyMessageResult(message=message)
-    #     raise NotImplementedError(
-    #         "AgentsSdkBrain.compose_daily_message: implement this (see TASK 6 above)."
-    #     )
+        except Exception as exc:
+            logger.error("compose_daily_message failed: %s", exc, exc_info=True)
+            return DailyMessageResult(
+                message="Metro update unavailable. Check wmata.com for service alerts."
+            )
