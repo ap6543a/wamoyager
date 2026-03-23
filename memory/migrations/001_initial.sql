@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS users (
     phone_e164  TEXT    NOT NULL UNIQUE,
     active      INTEGER NOT NULL DEFAULT 1,   -- 0=false, 1=true
     timezone    TEXT    NOT NULL DEFAULT 'America/New_York',
-    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    email       TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS user_preferences (

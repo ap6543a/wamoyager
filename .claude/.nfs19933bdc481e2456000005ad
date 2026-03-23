@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(python scripts/init_db.py)",
+      "Bash(python -c \"import wamoyager_runtime.config; print\\('Config import OK'\\)\")",
+      "Bash(python -c \"\nimport memory.models\nimport memory.db\nimport memory.queries\nimport brain.interface\nimport brain.stub_brain\nimport brain.agents_sdk_brain\nimport wamoyager_runtime.config\nimport wamoyager_runtime.logging_setup\nimport wamoyager_runtime.rails\nimport services.wmata_client\nimport services.notifier_twilio\nimport services.scheduler\nprint\\('All module imports OK'\\)\n\")",
+      "Bash(DATABASE_PATH=./wamoyager.db python scripts/init_db.py 2>&1)",
+      "Bash(sqlite3 wamoyager.db \"UPDATE users SET email = 'aprvs92@gmail.com' WHERE name = 'adam' COLLATE NOCASE; SELECT changes\\(\\);\")",
+      "Bash(python -c \"\nimport sqlite3\nconn = sqlite3.connect\\('wamoyager.db'\\)\nconn.execute\\(\\\\\"UPDATE users SET email = 'aprvs92@gmail.com' WHERE name = 'adam' COLLATE NOCASE\\\\\"\\)\nprint\\('Rows updated:', conn.total_changes\\)\nconn.commit\\(\\)\nrow = conn.execute\\(\\\\\"SELECT id, name, email FROM users WHERE name = 'adam' COLLATE NOCASE\\\\\"\\).fetchone\\(\\)\nprint\\('Record:', row\\)\nconn.close\\(\\)\n\")",
+      "Bash(python -c \"\nimport sqlite3\nconn = sqlite3.connect\\('wamoyager.db'\\)\nconn.execute\\(\\\\\"UPDATE users SET email = 'rhuangfh@gmail.com' WHERE name = 'Rachel' COLLATE NOCASE\\\\\"\\)\nprint\\('Rows updated:', conn.total_changes\\)\nconn.commit\\(\\)\nrow = conn.execute\\(\\\\\"SELECT id, name, email FROM users WHERE name = 'Rachel' COLLATE NOCASE\\\\\"\\).fetchone\\(\\)\nprint\\('Record:', row\\)\nconn.close\\(\\)\n\")",
+      "Bash(python -c \"\nimport sqlite3\nconn = sqlite3.connect\\('wamoyager.db'\\)\nrows = conn.execute\\(\\\\\"SELECT id, name, email FROM users WHERE name NOT IN \\('Adam', 'Rachel'\\) COLLATE NOCASE\\\\\"\\).fetchall\\(\\)\nfor r in rows: print\\(r\\)\nconn.close\\(\\)\n\")",
+      "Bash(python -c \"\nimport sqlite3\nconn = sqlite3.connect\\('wamoyager.db'\\)\nconn.execute\\(\\\\\"DELETE FROM users WHERE name NOT IN \\('Adam', 'Rachel'\\) COLLATE NOCASE\\\\\"\\)\nprint\\('Rows deleted:', conn.total_changes\\)\nconn.commit\\(\\)\nrows = conn.execute\\('SELECT id, name, email FROM users'\\).fetchall\\(\\)\nfor r in rows: print\\(r\\)\nconn.close\\(\\)\n\")",
+      "Bash(python -c \"\nimport sqlite3\nconn = sqlite3.connect\\('wamoyager.db'\\)\nrow = conn.execute\\('SELECT * FROM users WHERE name = \\\\\"Adam\\\\\" COLLATE NOCASE'\\).fetchone\\(\\)\ncols = [d[0] for d in conn.execute\\('SELECT * FROM users'\\).description]\nprint\\(list\\(zip\\(cols, row\\)\\)\\)\nconn.close\\(\\)\n\")",
+      "Bash(python -c \"\nimport sqlite3\nconn = sqlite3.connect\\('wamoyager.db'\\)\nconn.execute\\(\\\\\"INSERT INTO users \\(name, phone_e164, active, timezone, email\\) SELECT 'Keith', phone_e164, active, timezone, 'keith.krut@gmail.com' FROM users WHERE name = 'Adam' COLLATE NOCASE\\\\\"\\)\nprint\\('Rows inserted:', conn.total_changes\\)\nconn.commit\\(\\)\nrow = conn.execute\\(\\\\\"SELECT * FROM users WHERE name = 'Keith'\\\\\"\\).fetchone\\(\\)\nprint\\(row\\)\nconn.close\\(\\)\n\")"
+    ]
+  }
+}
