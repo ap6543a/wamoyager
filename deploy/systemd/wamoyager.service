@@ -5,11 +5,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-Group=pi
-WorkingDirectory=/home/pi/wamoyager
-EnvironmentFile=/home/pi/wamoyager/.env
-ExecStart=/home/pi/wamoyager/venv/bin/python -m wamoyager_runtime.main
+User=wamoyager
+Group=wamoyager
+WorkingDirectory=/home/wamoyager/wamoyager
+EnvironmentFile=/home/wamoyager/wamoyager/.env
+ExecStart=/home/wamoyager/wamoyager/venv/bin/python -m wamoyager_runtime.main
 Restart=on-failure
 RestartSec=10s
 StandardOutput=journal
